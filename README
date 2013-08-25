@@ -1,0 +1,32 @@
+﻿秋月のI2C接続小型LCD(AQM0802A)のLinux用デバイスドライバを作ってみました。
+http://akizukidenshi.com/catalog/g/gP-06669/
+LCDの機能を全部使えるようにはなっていません。文字の表示とコントラストの調整しかできません。
+Raspberry Pi(Rasbian Wheezy)上で開発しています。他のプラットホーム上でも多分動くと思います。
+
+使い方(Raspberry Piで使うことを想定):
+1.まずRasPiでI2Cを使えるようにします。
+/etc/modprobe.d/raspi-blacklist.confでi2c-bcm2708の行をコメントアウトします。
+#blacklist i2c-bcm2708
+rebootして設定を反映します。
+
+2.ドライバをコンパイルします。まずRasbianのカーネルをビルドしておく必要があります。
+カーネルビルドについては説明するのが面倒なので適当にググってください。
+/usr/src/linuxにカーネルソースがあるとすると
+make -C /usr/src/linux M=$PWD modules
+でドライバがビルドできます。
+
+3.出来上がったaqm0802a.koをinsmodします。そして以下のコマンドでI2CのアダプタにAQM0802Aが接続されていることを伝えます。
+echo aqm0802a 0x3e > /sys/class/i2c-adapter/i2c-1/new_device
+/proc/devicesでデバイスのメジャー番号を確認します。
+cat /proc/devices | grep aqm0802a
+私の環境では248でした。このメジャー番号を使ってデバイスファイルを作成します。
+mknod /dev/akilcd c 248 0
+
+4./dev/akilcdは16バイトまでの文字列を書き込むことができる普通のキャラクタデバイスです。
+echo -n "hoge" > /dev/akilcd
+で液晶に文字が表示されます(-nを付けないと改行コードが入ってしまいます)。
+
+5.AQM0802Aはコントラストを0から63まで設定することができます。
+デフォルトでは32になっています。これを変更するにはioctlを使います。
+ioctl(ファイルディスクリプタ, 26625, コントラスト);
+コントラスト設定のためのコマンドも作っておきました(setcontrast.c)。
