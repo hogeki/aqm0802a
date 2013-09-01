@@ -14,6 +14,7 @@
 
 #define AQM0802A_IOC_MAGIC 'h'
 #define AQM0802A_IOSETCONT _IO(AQM0802A_IOC_MAGIC, 1)
+#define AQM0802A_IOSETCURSOR _IO(AQM0802A_IOC_MAGIC, 2)
 
 static int major = 0;
 
@@ -65,6 +66,7 @@ ssize_t aqm0802a_write(struct file *filp, const char __user *buf, size_t count, 
 	struct aqm0802a_device *dev = filp->private_data;
 	int c = count;
 	char cmd[32];
+	int pos, len, l, i;
 
 	if((long)*f_pos + c > BUFSIZE - 1)
 	{
@@ -78,40 +80,60 @@ ssize_t aqm0802a_write(struct file *filp, const char __user *buf, size_t count, 
 		return -EFAULT;
 	}
 
+	pos = (int)*f_pos;
+	len = c;
+	l = len;
+
+	if(pos < 8)
+	{
+		cmd[0] = 0x00;
+		cmd[1] = 0x80 | pos; //set dram addr pos
+		i2c_master_send(dev->client, cmd, 2);
+		udelay(27);
+		if(pos + len > 8)
+		{
+			l = 8 - pos;
+		}
+		else
+		{
+			l = len;
+		}
+		cmd[0] = 0x40;
+		for(i = 0; i < l; i++)
+		{
+			cmd[i+1] = dev->buf[pos+i];
+		}
+		i2c_master_send(dev->client, cmd, l+1);
+		if(pos + len == 8)
+		{
+			cmd[0] = 0x00;
+			cmd[1] = 0x80 | 0x40;
+			i2c_master_send(dev->client, cmd, 2);
+			udelay(27);
+		}
+	}
+	if(pos + len > 8)
+	{
+		if(pos < 8)
+		{
+			pos = 8;
+			len -= l;
+		}
+		cmd[0] = 0x00;
+		cmd[1] = 0x80 | 0x40 | (pos - 8);
+		i2c_master_send(dev->client, cmd, 2);
+		udelay(27);
+		cmd[0] = 0x40;
+		for(i = 0; i < len; i++)
+		{
+			cmd[i+1] = dev->buf[pos+i];
+		}
+		i2c_master_send(dev->client, cmd, len+1);
+	}
+
 	*f_pos+=c;
 	if(*f_pos > dev->size)
 		dev->size = (int)*f_pos;
-
-	//clear lcd
-	cmd[0] = 0x00;
-	cmd[1] = 0x01;
-	i2c_master_send(dev->client, cmd, 2);
-	msleep(2);
-	//line1
-	cmd[0] = 0x40;
-	cmd[1] = dev->buf[0];
-	cmd[2] = dev->buf[1];
-	cmd[3] = dev->buf[2];
-	cmd[4] = dev->buf[3];
-	cmd[5] = dev->buf[4];
-	cmd[6] = dev->buf[5];
-	cmd[7] = dev->buf[6];
-	cmd[8] = dev->buf[7];
-	i2c_master_send(dev->client, cmd, 9);
-	//line2
-	cmd[0] = 0x00;
-	cmd[1] = 0x80 | 0x40; //set dram addr 0x40
-	i2c_master_send(dev->client, cmd, 2);
-	cmd[0] = 0x40;
-	cmd[1] = dev->buf[8];
-	cmd[2] = dev->buf[9];
-	cmd[3] = dev->buf[10];
-	cmd[4] = dev->buf[11];
-	cmd[5] = dev->buf[12];
-	cmd[6] = dev->buf[13];
-	cmd[7] = dev->buf[14];
-	cmd[8] = dev->buf[15];
-	i2c_master_send(dev->client, cmd, 9);
 
 	return c;
 }
@@ -120,6 +142,7 @@ loff_t aqm0802a_llseek(struct file *filp, loff_t off, int whence)
 {
 	struct aqm0802a_device *dev = filp->private_data;
 	loff_t newpos;
+	char cmd[2];
 
 	switch(whence)
 	{
@@ -142,6 +165,13 @@ loff_t aqm0802a_llseek(struct file *filp, loff_t off, int whence)
 	filp->f_pos = newpos;
 	if(newpos > dev->size)
 		dev->size = newpos;
+	cmd[0] = 0x00;
+	if(newpos < 8)
+		cmd[1] = 0x80 | (char)newpos;
+	else
+		cmd[1] = 0x80 | 0x40 | ((char)newpos-8);
+	i2c_master_send(dev->client, cmd, 2);
+		
 	return newpos;
 }
 
@@ -156,6 +186,26 @@ static void setcontrast(struct i2c_client *client, int cont)
 	i2c_master_send(client, cmd, 2);
 }
 
+static void setcursor(struct i2c_client *client, int c)
+{
+	char cmd[2];
+	
+	cmd[0] = 0x00;
+	switch(c)
+	{
+		case 0: //cursor off
+			cmd[1] = 0x0C;
+			break;
+		case 1: //cursor on
+			cmd[1] = 0x0E;
+			break;
+		case 2: //cursor blink
+			cmd[1] = 0x0F;
+			break;
+	}
+	i2c_master_send(client, cmd, 2);
+}
+
 long aqm0802a_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct aqm0802a_device *dev = filp->private_data;
@@ -164,6 +214,9 @@ long aqm0802a_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	{
 		case AQM0802A_IOSETCONT:
 			setcontrast(dev->client, (int)arg);
+			break;
+		case AQM0802A_IOSETCURSOR:
+			setcursor(dev->client, (int)arg);
 			break;
 		default:
 			return -ENOTTY;
@@ -219,7 +272,7 @@ static int __devinit aqm0802a_i2c_probe(struct i2c_client *client, const struct 
 	i2c_master_send(client, cmd, 7);
 	msleep(250);
 	cmd[0] = 0x00;
-	cmd[1] = 0x0c;
+	cmd[1] = 0x0e;
 	cmd[2] = 0x01;
 	cmd[3] = 0x06;
 	i2c_master_send(client, cmd, 4);
