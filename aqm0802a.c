@@ -15,6 +15,12 @@
 #define AQM0802A_IOC_MAGIC 'h'
 #define AQM0802A_IOSETCONT _IO(AQM0802A_IOC_MAGIC, 1)
 #define AQM0802A_IOSETCURSOR _IO(AQM0802A_IOC_MAGIC, 2)
+#define AQM0802A_IOSETCGRAM0 _IO(AQM0802A_IOC_MAGIC, 3)
+#define AQM0802A_IOSETCGRAM1 _IO(AQM0802A_IOC_MAGIC, 4)
+#define AQM0802A_IOSETCGRAM2 _IO(AQM0802A_IOC_MAGIC, 5)
+#define AQM0802A_IOSETCGRAM3 _IO(AQM0802A_IOC_MAGIC, 6)
+#define AQM0802A_IOSETCGRAM4 _IO(AQM0802A_IOC_MAGIC, 7)
+#define AQM0802A_IOSETCGRAM5 _IO(AQM0802A_IOC_MAGIC, 8)
 
 static int major = 0;
 
@@ -167,9 +173,9 @@ loff_t aqm0802a_llseek(struct file *filp, loff_t off, int whence)
 		dev->size = newpos;
 	cmd[0] = 0x00;
 	if(newpos < 8)
-		cmd[1] = 0x80 | (char)newpos;
+		cmd[1] = 0x80 | newpos;
 	else
-		cmd[1] = 0x80 | 0x40 | ((char)newpos-8);
+		cmd[1] = 0x80 | 0x40 | (newpos-8);
 	i2c_master_send(dev->client, cmd, 2);
 		
 	return newpos;
@@ -206,9 +212,35 @@ static void setcursor(struct i2c_client *client, int c)
 	i2c_master_send(client, cmd, 2);
 }
 
+static void setcgram(struct i2c_client *client, int loc, char *data)
+{
+	char cmd[9];
+	int i;
+
+	cmd[0] = 0x00;
+	cmd[1] = 0x38;
+	i2c_master_send(client, cmd, 2);
+	udelay(27);
+	cmd[1] = 0x40 | (loc << 3);
+	i2c_master_send(client, cmd, 2);
+	udelay(27);
+	cmd[0] = 0x40;
+	for(i = 0; i < 8; i++)
+	{
+		cmd[i+1] = data[i];
+	}
+	i2c_master_send(client, cmd, 9);
+	udelay(27);
+	cmd[0] = 0x00;
+	cmd[1] = 0x39;
+	i2c_master_send(client, cmd, 2);
+	udelay(27);
+}
+
 long aqm0802a_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct aqm0802a_device *dev = filp->private_data;
+	char data[8];
 
 	switch(cmd)
 	{
@@ -217,6 +249,22 @@ long aqm0802a_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			break;
 		case AQM0802A_IOSETCURSOR:
 			setcursor(dev->client, (int)arg);
+			break;
+		case AQM0802A_IOSETCGRAM0:
+		case AQM0802A_IOSETCGRAM1:
+		case AQM0802A_IOSETCGRAM2:
+		case AQM0802A_IOSETCGRAM3:
+		case AQM0802A_IOSETCGRAM4:
+		case AQM0802A_IOSETCGRAM5:
+			if(!access_ok(VERIFY_READ, (char __user *)arg, 8))
+			{
+				return -EFAULT;
+			}
+			if(copy_from_user(data, (char __user *)arg, 8))
+			{
+				return -EFAULT;
+			}
+			setcgram(dev->client, cmd-AQM0802A_IOSETCGRAM0, data);
 			break;
 		default:
 			return -ENOTTY;
@@ -272,7 +320,7 @@ static int __devinit aqm0802a_i2c_probe(struct i2c_client *client, const struct 
 	i2c_master_send(client, cmd, 7);
 	msleep(250);
 	cmd[0] = 0x00;
-	cmd[1] = 0x0e;
+	cmd[1] = 0x0c;
 	cmd[2] = 0x01;
 	cmd[3] = 0x06;
 	i2c_master_send(client, cmd, 4);
